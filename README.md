@@ -48,3 +48,6 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python src/real_eval.py --split val    # 実データ（手元のみ。集計表を outputs/real/ に出力）
 ```
 Notebook は `notebooks/`（初心者向け、出力を消してコミット）。カーネルは「Python (dl_forecast_lab)」。
+
+## Notebook を読むとき
+はじめての方は、まず [notebooks/00_basics.ipynb](notebooks/00_basics.ipynb)（基礎知識・用語集・読む順）から。各Notebookの冒頭には「やさしい導入」があります。
