@@ -272,3 +272,16 @@ class TestSeq(unittest.TestCase):
         from tsf_models import seq_fit_predict
         p = seq_fit_predict("gru", self.tr, self.va, 1, window=14, hidden=16, max_epochs=20, patience=5)
         self.assertLess(errors(p, self.va["gen_kwh"])["MAE"], errors(persistence(self.va, 1), self.va["gen_kwh"])["MAE"] / 2)
+
+
+class TestShortTrain(unittest.TestCase):
+    def test_学習期間が短くても_内側の検証が学習期間の1_4に収まり学習できる(self):
+        from tsf_models import mlp_fit_predict, seq_fit_predict
+        sp = split_series(make_series(1_000_000), train_years=1.5)
+        tr, va = sp["train"], sp["val"]
+        self.assertEqual(len(tr), round(365.25 * 1.5))
+        p, info = mlp_fit_predict(tr, va, 1, hidden=(16,), max_epochs=10, patience=3, return_info=True)
+        self.assertEqual(len(info["curves"][0][1]), len(info["curves"][0][0]))
+        self.assertFalse(np.isnan(p).any())
+        q = seq_fit_predict("gru", tr, va, 1, window=14, hidden=8, max_epochs=5, patience=2)
+        self.assertEqual(int(np.isnan(q).sum()), 0)

@@ -79,7 +79,7 @@ def mlp_fit_predict(train: pd.DataFrame, test: pd.DataFrame, L: int, groups=("ba
     for k in range(n_seeds):
         sd = seed * 1000 + k
         if epochs is None:
-            cut = len(Xs) - INNER_DAYS
+            cut = len(Xs) - min(INNER_DAYS, len(Xs) // 4)           # 学習期間が短いときは、内側の検証を学習期間の1/4までにする
             _, tl, el = _train(Xs[:cut], ys[:cut], Xs[cut:], ys[cut:], hidden, dropout, wd, lr, batch, max_epochs, sd, patience)
             n_ep = int(np.argmin(el)) + 1
             info["curves"].append((tl, el))

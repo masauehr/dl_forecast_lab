@@ -127,7 +127,7 @@ def seq_fit_predict(model: str, train: pd.DataFrame, test: pd.DataFrame, L: int,
     for k in range(n_seeds):
         sd = seed * 1000 + k
         if epochs is None:
-            cut = len(Sn) - INNER_DAYS
+            cut = len(Sn) - min(INNER_DAYS, len(Sn) // 4)           # 学習期間が短いときは、内側の検証を学習期間の1/4までにする
             _, tl, el = _train(make, Sn[:cut], Tn[:cut], yn[:cut], Sn[cut:], Tn[cut:], yn[cut:], lr, wd, batch, max_epochs, sd, patience)
             n_ep = int(np.argmin(el)) + 1
             info["curves"].append((tl, el))
