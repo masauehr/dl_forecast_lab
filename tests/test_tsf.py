@@ -99,3 +99,80 @@ class TestBaselines(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFeatures(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.df = make_series(1_000_000, 4)
+
+    def test_特徴量は_起点日より後の観測を見ない_リークしない(self):
+        from tsf_models import build_features
+        for L in (1, 3):
+            X = build_features(self.df, L)
+            for t in (100, 777, 1200):
+                d2 = self.df.copy()
+                rng = np.random.default_rng(0)
+                after = d2.index > t - L                                  # 起点日（t−L）より後の行
+                for c in ["gen_kwh", "gsr", "temp", "sunshine_ratio", "gsr_true", "soiling", "derate"]:
+                    d2.loc[after, c] = rng.random(after.sum()) * 100
+                d2.loc[after, "weather_class"] = rng.integers(0, 3, after.sum())
+                keep = d2.loc[t, f"fc{L}"]
+                d2.loc[after, f"fc{L}"] = rng.random(after.sum()) * 100
+                d2.loc[t, f"fc{L}"] = keep                                # 対象日の予報だけは使ってよい
+                X2 = build_features(d2, L)
+                pd.testing.assert_series_equal(X.loc[t], X2.loc[t])
+
+    def test_答えの列を変えても特徴量は変わらない(self):
+        from tsf_models import build_features
+        d2 = self.df.copy()
+        for c in ORACLE_COLUMNS:
+            d2[c] = 0.0
+        pd.testing.assert_frame_equal(build_features(self.df, 1), build_features(d2, 1))
+
+    def test_先頭は欠損_それ以降は欠損なし(self):
+        from tsf_models import build_features
+        from tsf_models.features import WARMUP
+        X = build_features(self.df, 2)
+        self.assertTrue(X.iloc[: WARMUP + 2].isna().all(axis=1).all())
+        self.assertFalse(X.iloc[WARMUP + 2:].isna().any().any())
+
+    def test_雨の降らない日数(self):
+        from tsf_models.features import _dry_days
+        np.testing.assert_array_equal(_dry_days(np.array([0, 0, 2, 1, 0, 2, 2, 0])), [0, 1, 0, 1, 2, 0, 0, 1])
+
+    def test_グループを選べる(self):
+        from tsf_models import build_features
+        self.assertEqual(list(build_features(self.df, 1, ("base",)).columns), ["fc", "sin_doy", "cos_doy"])
+        self.assertIn("dry_days", build_features(self.df, 1).columns)
+
+
+class TestClassic(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sp = split_series(make_series(1_000_000))
+        cls.tr, cls.va = sp["train"], sp["val"]
+
+    def test_予測は長さが同じで_先頭だけnan(self):
+        from tsf_models import fit_predict
+        p = fit_predict("ridge", self.tr, self.va, 1)
+        self.assertEqual(len(p), len(self.va))
+        self.assertFalse(np.isnan(p).any())                                # 検証の先頭は、学習期間の履歴があるのでnanにならない
+
+    def test_リッジは直線回帰と同程度_木は上回る(self):
+        from tsf_models import fit_predict
+        mae = lambda p: errors(p, self.va["gen_kwh"])["MAE"]              # noqa: E731
+        lin = mae(linear_fc(self.tr, self.va, 1))
+        self.assertAlmostEqual(mae(fit_predict("ridge", self.tr, self.va, 1)), lin, delta=0.06)
+        self.assertLess(mae(fit_predict("hgb", self.tr, self.va, 1)), lin - 0.03)
+
+    def test_同じシードなら同じ予測(self):
+        from tsf_models import fit_predict
+        a = fit_predict("rf", self.tr, self.va, 1, seed=3, n_estimators=30)
+        b = fit_predict("rf", self.tr, self.va, 1, seed=3, n_estimators=30)
+        np.testing.assert_allclose(a, b, rtol=1e-9)   # 並列計算の足し算の順序で、1e-16程度ずれうる
+
+    def test_未知の手法はエラー(self):
+        from tsf_models import fit_predict
+        with self.assertRaises(ValueError):
+            fit_predict("xyz", self.tr, self.va, 1)

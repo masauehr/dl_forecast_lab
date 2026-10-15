@@ -31,12 +31,13 @@ Phase0 合成データ・指標・基準（持続予報・平年値・予報の�
 ```
 
 ## 現在の状況
-**Phase0（合成データ・指標・基準）完了。** 次は Phase1（古典的な機械学習）。進め方は [PLAN.md](PLAN.md)。pc_docs運用マニュアルのコピーは [dl-forecast-lab.md](dl-forecast-lab.md)。
+**Phase0（合成データ・指標・基準）・Phase1（古典的な機械学習）完了。** 次は Phase2（ニューラルネット）。進め方は [PLAN.md](PLAN.md)。pc_docs運用マニュアルのコピーは [dl-forecast-lab.md](dl-forecast-lab.md)。
 
 ## 使い方
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m unittest discover -s tests   # テスト（12件）
+.venv/bin/python -m unittest discover -s tests   # テスト（21件）
 .venv/bin/python src/run_phase0.py               # 基準の比較（約10秒）
+.venv/bin/python src/run_phase1.py               # 古典的な機械学習（約1.5分）
 ```
 Notebook は `notebooks/`（初心者向け、出力を消してコミット）。カーネルは「Python (dl_forecast_lab)」。
