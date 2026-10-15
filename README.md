@@ -5,7 +5,7 @@
 
 詳しくは [MANUAL.md](MANUAL.md) / [DATA_SPEC.md](DATA_SPEC.md) / [EVALUATION.md](EVALUATION.md) / [PLAN.md](PLAN.md) を参照。
 
-> 🔒 学習・評価は**合成データ**。自宅の発電量などの実データは、最終フェーズでだけ**手元（git管理外）**で使う。
+> 🔒 学習・評価は**合成データ**。自宅の発電量などの実データ（生データ）は、最終フェーズでだけ**手元で読み取り専用**に使い、コピー・コミットしない（集計した結果の表だけ `outputs/real/` にコミットしてある）。
 
 ## なぜこのプロジェクトか
 
@@ -45,6 +45,6 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python src/run_phase5.py               # 確率予測（約10分）
 .venv/bin/python src/final_eval.py --split val   # 最終評価の予行演習（約12分）
 .venv/bin/python src/final_eval.py --split test  # 最終評価（1回だけ。使用済みだと拒否される）
-.venv/bin/python src/real_eval.py --split val    # 実データ（手元のみ・git管理外に出力）
+.venv/bin/python src/real_eval.py --split val    # 実データ（手元のみ。集計表を outputs/real/ に出力）
 ```
 Notebook は `notebooks/`（初心者向け、出力を消してコミット）。カーネルは「Python (dl_forecast_lab)」。

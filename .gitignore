@@ -10,9 +10,10 @@ outputs/*
 !outputs/.gitkeep
 !outputs/final/
 !outputs/final/*
+!outputs/real/
+!outputs/real/*
 
-# 実データの結果は絶対にコミットしない
-outputs/real/
+# 実データ: 生データ（発電量の日次値）はコピー・コミットしない。集計結果（MAE・カバー率など）の outputs/real/ は、ユーザーの指示（2026-10-15）で管理する
 
 *.pt
 *.pth
