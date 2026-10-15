@@ -12,6 +12,8 @@ import pandas as pd
 import torch
 from torch import nn
 
+from .losses import loss_fn
+
 torch.set_num_threads(4)
 INNER_DAYS = 730
 N_CH = 9
@@ -42,10 +44,10 @@ def build_windows(df: pd.DataFrame, L: int, W: int):
 
 
 class GRUNet(nn.Module):
-    def __init__(self, hidden=32, W=30):
+    def __init__(self, hidden=32, W=30, n_out=1):
         super().__init__()
         self.rnn = nn.GRU(N_CH, hidden, batch_first=True)
-        self.head = nn.Sequential(nn.Linear(hidden + 3, 32), nn.ReLU(), nn.Linear(32, 1))
+        self.head = nn.Sequential(nn.Linear(hidden + 3, 32), nn.ReLU(), nn.Linear(32, n_out))
 
     def forward(self, seq, stat):
         _, h = self.rnn(seq)
@@ -53,10 +55,10 @@ class GRUNet(nn.Module):
 
 
 class CNNNet(nn.Module):
-    def __init__(self, hidden=32, W=30):
+    def __init__(self, hidden=32, W=30, n_out=1):
         super().__init__()
         self.conv = nn.Sequential(nn.Conv1d(N_CH, hidden, 3, padding=1), nn.ReLU(), nn.Conv1d(hidden, hidden, 3, padding=2, dilation=2), nn.ReLU())
-        self.head = nn.Sequential(nn.Linear(2 * hidden + 3, 32), nn.ReLU(), nn.Linear(32, 1))
+        self.head = nn.Sequential(nn.Linear(2 * hidden + 3, 32), nn.ReLU(), nn.Linear(32, n_out))
 
     def forward(self, seq, stat):
         z = self.conv(seq.transpose(1, 2))                              # (n, hidden, W)
@@ -65,9 +67,9 @@ class CNNNet(nn.Module):
 
 class FlatMLP(nn.Module):
     """窓を1列に並べただけのMLP（時間の並びの構造を使わない）"""
-    def __init__(self, hidden=32, W=30):
+    def __init__(self, hidden=32, W=30, n_out=1):
         super().__init__()
-        self.net = nn.Sequential(nn.Linear(W * N_CH + 3, hidden), nn.ReLU(), nn.Linear(hidden, 32), nn.ReLU(), nn.Linear(32, 1))
+        self.net = nn.Sequential(nn.Linear(W * N_CH + 3, hidden), nn.ReLU(), nn.Linear(hidden, 32), nn.ReLU(), nn.Linear(32, n_out))
 
     def forward(self, seq, stat):
         return self.net(torch.cat([seq.flatten(1), stat], dim=1))
@@ -76,7 +78,7 @@ class FlatMLP(nn.Module):
 NETS = {"gru": GRUNet, "cnn": CNNNet, "flat": FlatMLP}
 
 
-def _train(make, S, T, y, Sev, Tev, yev, lr, wd, batch, epochs, seed, patience=None):
+def _train(make, S, T, y, Sev, Tev, yev, lr, wd, batch, epochs, seed, patience=None, qs=None):
     torch.manual_seed(seed)
     gen = torch.Generator().manual_seed(seed)
     net = make()
@@ -90,15 +92,15 @@ def _train(make, S, T, y, Sev, Tev, yev, lr, wd, batch, epochs, seed, patience=N
         for s in range(0, len(S_), batch):
             idx = perm[s:s + batch]
             opt.zero_grad()
-            loss = ((net(S_[idx], T_[idx]).squeeze(1) - y_[idx]) ** 2).mean()
+            loss = loss_fn(net(S_[idx], T_[idx]), y_[idx], qs)
             loss.backward(); opt.step()
             tot += float(loss.detach()) * len(idx)
         tr_loss.append(tot / len(S_))
         if Sev is not None:
             net.eval()
             with torch.no_grad():
-                e = float(((net(torch.tensor(Sev, dtype=torch.float32), torch.tensor(Tev, dtype=torch.float32)).squeeze(1)
-                            - torch.tensor(yev, dtype=torch.float32)) ** 2).mean())
+                e = float(loss_fn(net(torch.tensor(Sev, dtype=torch.float32), torch.tensor(Tev, dtype=torch.float32)),
+                                  torch.tensor(yev, dtype=torch.float32), qs))
             ev_loss.append(e)
             if e < best - 1e-5:
                 best, bad = e, 0
@@ -111,7 +113,8 @@ def _train(make, S, T, y, Sev, Tev, yev, lr, wd, batch, epochs, seed, patience=N
 
 def seq_fit_predict(model: str, train: pd.DataFrame, test: pd.DataFrame, L: int, window: int = 30, hidden: int = 32,
                     wd: float = 1e-4, lr: float = 2e-3, batch: int = 128, max_epochs: int = 100, patience: int = 10,
-                    seed: int = 0, n_seeds: int = 1, epochs=None, return_info: bool = False):
+                    seed: int = 0, n_seeds: int = 1, epochs=None, return_info: bool = False, quantiles=None):
+    qs = None if quantiles is None else torch.tensor(quantiles, dtype=torch.float32)       # 指定すると pinball loss で学習し、(n, 分位点の数) を返す
     both = pd.concat([train, test], ignore_index=True)
     seq, stat, valid = build_windows(both, L, window)
     ntr = len(train)
@@ -122,22 +125,23 @@ def seq_fit_predict(model: str, train: pd.DataFrame, test: pd.DataFrame, L: int,
     mu_y, sd_y = y.mean(), y.std()
     Sn, Tn, yn = (S - mu_s) / sd_s, (T - mu_t) / sd_t, (y - mu_y) / sd_y
     Se, Te = (seq[ntr:] - mu_s) / sd_s, (stat[ntr:] - mu_t) / sd_t
-    make = lambda: NETS[model](hidden, window)                         # noqa: E731
+    make = lambda: NETS[model](hidden, window, 1 if qs is None else len(qs))                         # noqa: E731
     preds, info = [], {"epochs": [], "curves": []}
     for k in range(n_seeds):
         sd = seed * 1000 + k
         if epochs is None:
             cut = len(Sn) - min(INNER_DAYS, len(Sn) // 4)           # 学習期間が短いときは、内側の検証を学習期間の1/4までにする
-            _, tl, el = _train(make, Sn[:cut], Tn[:cut], yn[:cut], Sn[cut:], Tn[cut:], yn[cut:], lr, wd, batch, max_epochs, sd, patience)
+            _, tl, el = _train(make, Sn[:cut], Tn[:cut], yn[:cut], Sn[cut:], Tn[cut:], yn[cut:], lr, wd, batch, max_epochs, sd, patience, qs)
             n_ep = int(np.argmin(el)) + 1
             info["curves"].append((tl, el))
         else:
             n_ep = epochs
         info["epochs"].append(n_ep)
-        net, _, _ = _train(make, Sn, Tn, yn, None, None, None, lr, wd, batch, n_ep, sd)
+        net, _, _ = _train(make, Sn, Tn, yn, None, None, None, lr, wd, batch, n_ep, sd, None, qs)
         net.eval()
         with torch.no_grad():
-            preds.append(net(torch.tensor(Se, dtype=torch.float32), torch.tensor(Te, dtype=torch.float32)).squeeze(1).numpy() * sd_y + mu_y)
+            o = net(torch.tensor(Se, dtype=torch.float32), torch.tensor(Te, dtype=torch.float32)).numpy() * sd_y + mu_y
+            preds.append(o[:, 0] if qs is None else np.sort(o, axis=1))
     pred = np.mean(preds, axis=0)
-    pred[~valid[ntr:]] = np.nan
+    pred[~valid[ntr:]] = np.nan                                   # (n,) または (n, Q)
     return (pred, info) if return_info else pred

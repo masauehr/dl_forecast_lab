@@ -36,3 +36,22 @@ def fit_predict(model: str, train: pd.DataFrame, test: pd.DataFrame, L: int, gro
     pred = pred.astype(float)
     pred[Xte.isna().any(axis=1).to_numpy()] = np.nan
     return pred
+
+
+def fit_predict_quantiles(train: pd.DataFrame, test: pd.DataFrame, L: int, qs, groups=("base", "gen", "weather", "dry"),
+                          seed: int = 0, **params) -> np.ndarray:
+    """勾配ブースティングの分位点回帰（分位点ごとに別のモデル）。(n, 分位点の数)。小さい順に並べ替える（交差の防止）"""
+    both = pd.concat([train, test], ignore_index=True)
+    X = build_features(both, L, groups)
+    Xtr, Xte = X.iloc[: len(train)], X.iloc[len(train):]
+    ytr = train["gen_kwh"].to_numpy()
+    ok = ~Xtr.isna().any(axis=1).to_numpy()
+    out = np.zeros((len(test), len(qs)))
+    for j, q in enumerate(qs):
+        m = HistGradientBoostingRegressor(loss="quantile", quantile=q, max_iter=params.get("max_iter", 300), learning_rate=params.get("learning_rate", 0.05),
+                                          max_depth=params.get("max_depth", 4), min_samples_leaf=params.get("min_samples_leaf", 20),
+                                          l2_regularization=params.get("l2", 1.0), random_state=seed).fit(Xtr[ok], ytr[ok])
+        out[:, j] = m.predict(Xte.fillna(0))
+    out = np.sort(out, axis=1)
+    out[Xte.isna().any(axis=1).to_numpy()] = np.nan
+    return out

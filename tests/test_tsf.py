@@ -285,3 +285,62 @@ class TestShortTrain(unittest.TestCase):
         self.assertFalse(np.isnan(p).any())
         q = seq_fit_predict("gru", tr, va, 1, window=14, hidden=8, max_epochs=5, patience=2)
         self.assertEqual(int(np.isnan(q).sum()), 0)
+
+
+class TestProbabilistic(unittest.TestCase):
+    def test_pinball損失の計算(self):
+        from tsf_eval import pinball
+        # 予測が実測より低い(y=3, q=1)と、τ=0.9 なら 0.9×2=1.8、τ=0.1 なら 0.1×2=0.2
+        self.assertAlmostEqual(pinball([3.0], [[1.0]], [0.9]), 1.8)
+        self.assertAlmostEqual(pinball([3.0], [[1.0]], [0.1]), 0.2)
+        # 予測が実測より高い(y=1, q=3)と、τ=0.9 なら 0.1×2=0.2
+        self.assertAlmostEqual(pinball([1.0], [[3.0]], [0.9]), 0.2)
+
+    def test_pinballは真の分位点で最小になる(self):
+        from tsf_eval import pinball
+        rng = np.random.default_rng(0)
+        y = rng.normal(0, 1, 20000)
+        for tau in (0.1, 0.5, 0.9):
+            qs = np.linspace(-2, 2, 81)
+            losses = [pinball(y, np.full((len(y), 1), q), [tau]) for q in qs]
+            self.assertAlmostEqual(qs[int(np.argmin(losses))], np.quantile(y, tau), delta=0.1)
+
+    def test_カバー率と幅と校正(self):
+        from tsf_eval import calibration, coverage, width
+        y = np.array([1.0, 2.0, 3.0, 4.0])
+        self.assertAlmostEqual(coverage(y, y - 0.5, y + 0.5), 1.0)
+        self.assertAlmostEqual(coverage(y, y + 0.1, y + 0.5), 0.0)
+        self.assertAlmostEqual(width(y - 1, y + 1), 2.0)
+        np.testing.assert_allclose(calibration(y, np.array([[2.5, 5.0]] * 4), [0.5, 0.9]), [0.5, 1.0])
+
+    def test_CQRは校正データのカバー率を合わせる(self):
+        from tsf_eval import coverage, cqr_shift
+        rng = np.random.default_rng(1)
+        y = rng.normal(0, 1, 5000)
+        lo, hi = np.full(5000, -0.5), np.full(5000, 0.5)               # 狭すぎる区間（カバー率 約38%）
+        s = cqr_shift(y, lo, hi, 0.2)
+        self.assertGreater(s, 0)                                       # 広げる
+        self.assertAlmostEqual(coverage(y, lo - s, hi + s), 0.8, delta=0.02)
+        y2 = rng.normal(0, 1, 5000)
+        self.assertAlmostEqual(coverage(y2, lo - s, hi + s), 0.8, delta=0.03)   # 別のデータでも成り立つ
+
+    def test_分位点の予測は交差せず_形が正しい(self):
+        from tsf_models import fit_predict_quantiles, mlp_fit_predict, seq_fit_predict
+        sp = split_series(make_series(1_000_000))
+        tr, va = sp["train"], sp["val"]
+        qs = [0.1, 0.5, 0.9]
+        for Q in (fit_predict_quantiles(tr, va, 1, qs, max_iter=20), mlp_fit_predict(tr, va, 1, hidden=(8,), epochs=3, quantiles=qs),
+                  seq_fit_predict("gru", tr, va, 1, window=10, hidden=8, epochs=2, quantiles=qs)):
+            self.assertEqual(Q.shape, (len(va), 3))
+            ok = ~np.isnan(Q).any(axis=1)
+            self.assertTrue((np.diff(Q[ok], axis=1) >= 0).all())
+
+    def test_点予測は分位点の追加で変わらない(self):
+        from tsf_models import mlp_fit_predict
+        sp = split_series(make_series(1_000_000))
+        a = mlp_fit_predict(sp["train"], sp["val"], 1, hidden=(8,), epochs=3, seed=1)
+        self.assertEqual(a.ndim, 1)
+
+    def test_残差の経験分位点(self):
+        from tsf_eval import residual_quantiles
+        np.testing.assert_allclose(residual_quantiles(np.arange(101.0), [0.1, 0.5]), [10.0, 50.0])
