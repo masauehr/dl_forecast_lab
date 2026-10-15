@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# 生成データ・結果は再現可能なため管理外（コードとmdだけを管理する）。最終評価の記録は管理する
+data/*
+outputs/*
+!data/.gitkeep
+!outputs/.gitkeep
+!outputs/final/
+!outputs/final/*
+
+# 実データの結果は絶対にコミットしない
+outputs/real/
+
+*.pt
+*.pth
+.env
