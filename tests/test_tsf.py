@@ -221,3 +221,54 @@ class TestMLP(unittest.TestCase):
         singles = [mae(mlp_fit_predict(self.tr, self.va, 1, hidden=(32,), seed=s)) for s in range(3)]
         ens = mae(mlp_fit_predict(self.tr, self.va, 1, hidden=(32,), seed=0, n_seeds=3))
         self.assertLess(ens, np.mean(singles))
+
+
+class TestSeq(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sp = split_series(make_series(1_000_000))
+        cls.tr, cls.va = sp["train"], sp["val"]
+
+    def test_窓は起点日までの日だけを含む_リークしない(self):
+        from tsf_models.seq import build_windows, channels
+        df = make_series(1_000_000, 2)
+        L, W, t = 3, 10, 200
+        seq, stat, valid = build_windows(df, L, W)
+        ch = channels(df)
+        np.testing.assert_allclose(seq[t], ch[t - L - W + 1: t - L + 1])      # 窓の最後の日は t−L（起点日）
+        self.assertEqual(stat[t, 0], df.loc[t, f"fc{L}"])
+        d2 = df.copy()
+        after = d2.index > t - L
+        for c in ["gen_kwh", "gsr", "temp", "sunshine_ratio"]:
+            d2.loc[after, c] = 999.0
+        d2.loc[after, "weather_class"] = 1
+        seq2, _, _ = build_windows(d2, L, W)
+        np.testing.assert_allclose(seq[t], seq2[t])
+        self.assertFalse(valid[: W + L - 1].any())
+        self.assertTrue(valid[W + L:].all())
+
+    def test_ネットの出力の形(self):
+        import torch
+        from tsf_models.seq import NETS, N_CH
+        for name, cls in NETS.items():
+            out = cls(8, 12)(torch.zeros(5, 12, N_CH), torch.zeros(5, 3))
+            self.assertEqual(tuple(out.shape), (5, 1), name)
+
+    def test_同じシードなら同じ予測(self):
+        from tsf_models import seq_fit_predict
+        a = seq_fit_predict("gru", self.tr, self.va, 1, window=14, hidden=8, epochs=3, seed=1)
+        b = seq_fit_predict("gru", self.tr, self.va, 1, window=14, hidden=8, epochs=3, seed=1)
+        np.testing.assert_allclose(a, b)
+
+    def test_検証期間の後半を変えても前半の予測は変わらない(self):
+        from tsf_models import seq_fit_predict
+        va2 = self.va.copy()
+        va2.loc[400:, ["gen_kwh", "gsr", "temp", "fc1"]] = 123.0
+        a = seq_fit_predict("cnn", self.tr, self.va, 1, window=14, hidden=8, epochs=3, seed=0)
+        b = seq_fit_predict("cnn", self.tr, va2, 1, window=14, hidden=8, epochs=3, seed=0)
+        np.testing.assert_allclose(a[:400], b[:400])
+
+    def test_GRUは持続予報より良い(self):
+        from tsf_models import seq_fit_predict
+        p = seq_fit_predict("gru", self.tr, self.va, 1, window=14, hidden=16, max_epochs=20, patience=5)
+        self.assertLess(errors(p, self.va["gen_kwh"])["MAE"], errors(persistence(self.va, 1), self.va["gen_kwh"])["MAE"] / 2)
