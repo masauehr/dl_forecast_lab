@@ -344,3 +344,35 @@ class TestProbabilistic(unittest.TestCase):
     def test_残差の経験分位点(self):
         from tsf_eval import residual_quantiles
         np.testing.assert_allclose(residual_quantiles(np.arange(101.0), [0.1, 0.5]), [10.0, 50.0])
+
+
+class TestFinalEval(unittest.TestCase):
+    def test_最終評価の世界は開発用と重ならず_testは3M以上(self):
+        import final_eval
+        dev = {1_000_000 + i for i in range(10)}
+        for seeds in final_eval.SPLITS.values():
+            self.assertFalse(dev & set(seeds))
+        self.assertTrue(all(sd >= 3_000_000 for sd in final_eval.SPLITS["test"]))
+        self.assertFalse(set(final_eval.SPLITS["val"]) & set(final_eval.SPLITS["test"]))
+
+    def test_最終評価の設定は固定されている(self):
+        import final_eval
+        c = final_eval.FINAL_CONFIG
+        self.assertEqual(c["mlp"]["hidden"], (32,))
+        self.assertEqual(c["gru"]["window"], 30)
+        self.assertEqual(c["n_seeds"], 3)
+
+
+class TestRealData(unittest.TestCase):
+    def test_実データの変換と分割_ファイルがなければスキップ(self):
+        from real_data import REAL_DIR, load_real, split_real
+        if not (REAL_DIR / "hatuden_daily.csv").exists():
+            self.skipTest("実データなし")
+        df = load_real()
+        self.assertTrue((df["date"].diff().dropna().dt.days == 1).all())
+        self.assertFalse(df[["weather_class", "sunshine_ratio", "gsr", "temp", "gen_kwh", "fc1"]].isna().any().any())
+        self.assertTrue(df["weather_class"].isin([0, 1, 2]).all())
+        tr, va, te = split_real(df)
+        self.assertEqual(len(tr) + len(va) + len(te), len(df))
+        self.assertLess(tr["date"].max(), va["date"].min())
+        self.assertLess(va["date"].max(), te["date"].min())
