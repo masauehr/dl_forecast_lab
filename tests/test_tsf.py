@@ -176,3 +176,48 @@ class TestClassic(unittest.TestCase):
         from tsf_models import fit_predict
         with self.assertRaises(ValueError):
             fit_predict("xyz", self.tr, self.va, 1)
+
+
+class TestMLP(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sp = split_series(make_series(1_000_000))
+        cls.tr, cls.va = sp["train"], sp["val"]
+
+    def test_同じシードなら同じ予測_違えば違う(self):
+        from tsf_models import mlp_fit_predict
+        a = mlp_fit_predict(self.tr, self.va, 1, hidden=(16,), epochs=5, seed=1)
+        b = mlp_fit_predict(self.tr, self.va, 1, hidden=(16,), epochs=5, seed=1)
+        c = mlp_fit_predict(self.tr, self.va, 1, hidden=(16,), epochs=5, seed=2)
+        np.testing.assert_allclose(a, b)
+        self.assertFalse(np.allclose(a, c))
+
+    def test_検証期間の後半を変えても前半の予測は変わらない_標準化も学習期間だけ(self):
+        from tsf_models import mlp_fit_predict
+        va2 = self.va.copy()
+        va2.loc[400:, ["gen_kwh", "gsr", "temp", "fc1"]] = 123.0
+        a = mlp_fit_predict(self.tr, self.va, 1, hidden=(16,), epochs=5, seed=0)
+        b = mlp_fit_predict(self.tr, va2, 1, hidden=(16,), epochs=5, seed=0)
+        np.testing.assert_allclose(a[:400], b[:400])
+
+    def test_早期終了は上限以下のエポックを選び_指定エポックはそのまま使う(self):
+        from tsf_models import mlp_fit_predict
+        _, info = mlp_fit_predict(self.tr, self.va, 1, hidden=(16,), max_epochs=30, patience=5, return_info=True)
+        self.assertTrue(1 <= info["epochs"][0] <= 30)
+        self.assertEqual(len(info["curves"][0][0]), len(info["curves"][0][1]))
+        _, info2 = mlp_fit_predict(self.tr, self.va, 1, hidden=(16,), epochs=7, return_info=True)
+        self.assertEqual(info2["epochs"], [7])
+
+    def test_持続予報より良く_直線回帰と同程度以上(self):
+        from tsf_models import mlp_fit_predict
+        mae = lambda p: errors(p, self.va["gen_kwh"])["MAE"]              # noqa: E731
+        m = mae(mlp_fit_predict(self.tr, self.va, 1, hidden=(32,), n_seeds=2))
+        self.assertLess(m, mae(persistence(self.va, 1)) / 2)
+        self.assertLess(m, mae(linear_fc(self.tr, self.va, 1)) + 0.03)
+
+    def test_アンサンブルは単体より誤差が小さい(self):
+        from tsf_models import mlp_fit_predict
+        mae = lambda p: errors(p, self.va["gen_kwh"])["MAE"]              # noqa: E731
+        singles = [mae(mlp_fit_predict(self.tr, self.va, 1, hidden=(32,), seed=s)) for s in range(3)]
+        ens = mae(mlp_fit_predict(self.tr, self.va, 1, hidden=(32,), seed=0, n_seeds=3))
+        self.assertLess(ens, np.mean(singles))
